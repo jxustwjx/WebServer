@@ -227,11 +227,6 @@ void send_file(int cfd, char* path)
         return;
     }
 
-    //…Ë÷√∑«∂¬»˚ Ù–‘
-    int flag = fcntl(fd, F_GETFL);
-    flag |= O_NONBLOCK;
-    fcntl(fd, F_SETFL, flag);
-
     char buf[1024] = {0};
 
     while (1)
@@ -245,6 +240,7 @@ void send_file(int cfd, char* path)
         {
             send(cfd, buf, len, 0);
         }
+        memset(buf, 0, sizeof(buf));
     }
     close(fd);
 }

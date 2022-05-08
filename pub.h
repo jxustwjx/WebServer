@@ -22,6 +22,6 @@ void strencode(char* to, size_t tosize, const char* from);//±àÂë
 void strdecode(char *to, char *from);//½âÂë
 static ssize_t my_read(int fd, char *ptr);
 ssize_t Readline(int fd, char *vptr, size_t maxlen);
-void send_file(int cfd, char* path, int epfd, int flag);
+void send_file(int cfd, char* path);
 void send_header(int cfd, int code, char* info, char* filetype, int length);
 

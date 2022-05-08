@@ -86,7 +86,8 @@ int main()
     }
 
     //创建线程池
-    ThreadPool* pool = new ThreadPool(3, 10);
+    ThreadPool* pool = new ThreadPool(5, 30);
+    printf("server is running...\n");
 
     struct epoll_event evs[N];
     int size = sizeof(evs) / sizeof(struct epoll_event);
@@ -94,7 +95,7 @@ int main()
     while (true)
     {
         int num = epoll_wait(epfd, evs, size, -1);
-        printf("%d fd is change...\n", num);
+        //printf("%d fd is change...\n", num);
         if (num == -1) 
         {
             perror("epool_wait");
@@ -133,14 +134,17 @@ void acceptConn(void* arg)
     printf("new client ip=%s port=%d\n",
             inet_ntop(AF_INET, &cliaddr.sin_addr.s_addr, ip, 16),
             ntohs(cliaddr.sin_port));
+
     //设置非堵塞属性
     int flag = fcntl(cfd, F_GETFL);
     flag |= O_NONBLOCK;
     fcntl(cfd, F_SETFL, flag);
+
     //设置监视读缓冲区边沿触发
     struct epoll_event ev;
     ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = cfd;
+
     //将事件上树
     epoll_ctl(info->epfd, EPOLL_CTL_ADD, cfd, &ev);
 }
@@ -156,12 +160,19 @@ void communication(void* arg)
     int n = Readline(info->fd, buf, sizeof(buf));
     if (n <= 0)
     {
-        printf("close or err\n");
-        epoll_ctl(info->epfd, EPOLL_CTL_DEL, info->fd, NULL);
-        close(info->fd);
+        if (n == 0)
+        {
+            printf("client is disconnect\n");
+            epoll_ctl(info->epfd, EPOLL_CTL_DEL, info->fd, NULL);
+            close(info->fd);
+        }
+        else
+        {
+            perror("read error");
+        }
         return;
     }
-    printf("[%s]\n", buf);
+    printf("%s\n", buf);
     int ret = 0;
     while ((ret = Readline(info->fd, tmp, sizeof(tmp))) > 0);
 
@@ -183,22 +194,22 @@ void communication(void* arg)
         {
             printf("file not fount\n");
             send_header(info->fd, 404, "NOT FOUND", get_mime_type("*.html"), 0);
-            send_file(info->fd, "error.html", info->epfd, 1);
+            send_file(info->fd, "error.html");
         }
         else
         {
             if (S_ISREG(s.st_mode))//普通文件
             {
-                printf("file\n");
+                printf("request is a File\n");
                 send_header(info->fd, 200, "OK", get_mime_type(strfile), s.st_size);
-                send_file(info->fd, strfile, info->epfd, 1);
+                send_file(info->fd, strfile);
 
             }
             else if (S_ISDIR(s.st_mode))//目录
             {
-                printf("dir\n");
+                printf("request is Dir\n");
                 send_header(info->fd, 200, "OK", get_mime_type("*.html"), 0);
-                send_file(info->fd, "dir_header.html", info->epfd, 0);
+                send_file(info->fd, "dir_header.html");
 
                 struct dirent** mylist = NULL;
                 char buf[N] = {0};
@@ -220,7 +231,7 @@ void communication(void* arg)
                     free(mylist[i]);
                 }
                 free(mylist);
-                send_file(info->fd, "dir_tail.html", info->epfd, 1);
+                send_file(info->fd, "dir_tail.html");
             }
         }
     }

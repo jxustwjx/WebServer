@@ -218,43 +218,33 @@ void send_header(int cfd, int code, char* info, char* filetype, int length)
     send(cfd, "\r\n", 2, 0);
 }
 
-void send_file(int cfd, char* path, int epfd, int flag)
+void send_file(int cfd, char* path)
 {
     int fd = open(path, O_RDONLY);
     if (fd < 0)
     {
-        perror("open");
+        perror("open error");
         return;
     }
+
+    //设置非堵塞属性
+    int flag = fcntl(fd, F_GETFL);
+    flag |= O_NONBLOCK;
+    fcntl(fd, F_SETFL, flag);
+
     char buf[1024] = {0};
-    int len = 0;
+
     while (1)
     {
-
-        len = read(fd, buf, sizeof(buf));
-        if (len < 0)
-        {
-            perror("read");
-            break;
-
-        }
-        else if (len == 0)
+        int len = read(fd, buf, sizeof(buf));
+        if (len <= 0)
         {
             break;
         }
         else
         {
-            int n = 0;
-            n = send(cfd, buf, len, 0);
-            printf("len=%d\n", n);
-
+            send(cfd, buf, len, 0);
         }
     }
     close(fd);
-    //关闭cfd,下树
-    if (flag == 1)
-    {
-        close(cfd);
-        epoll_ctl(epfd, EPOLL_CTL_DEL, cfd, NULL);
-    }
 }

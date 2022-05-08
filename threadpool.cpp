@@ -54,7 +54,7 @@ ThreadPool::ThreadPool(int minn, int maxn)
 ThreadPool::~ThreadPool()
 {
     shutdown = true;
-    printf("!!!!!!!!!!threadpool is close...\n");
+    printf("threadpool is close...\n");
     pthread_join(managerID, NULL);
     for (int i = 0; i < aliveNum; i ++)
     {
@@ -130,7 +130,7 @@ void* ThreadPool::worker(void* arg)
         delete task.arg;
         task.arg = nullptr;
 
-        printf("thread %ld finish working...\n", pthread_self());
+        //printf("thread %ld finish working...\n", pthread_self());
 
         pthread_mutex_lock(&pool->mutexPool);
         pool->busyNum --;

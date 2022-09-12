@@ -1,37 +1,8 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <sys/epoll.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <dirent.h>
-#include "threadpool.h"
-#include "pub.h"
+#include "server.h"
 
-const int N = 1024;
-const int PORT = 10000;
-
-void acceptConn(void* arg);
-void communication(void* arg);
-
-typedef struct sockInfo
+int initListenFd(unsigned short port)
 {
-    int epfd;
-    int fd;
-}sockInfo;
-
-int main()
-{
-    signal(SIGPIPE, SIG_IGN);
-    //åˆ‡æ¢å·¥ä½œç›®å½•
-    char workdir[256] = {0};
-    strcpy(workdir,getenv("PWD"));
-    strcat(workdir,"/web-http");
-    chdir(workdir);
-
-    //åˆ›å»ºå¥—æ¥å­—
+    //´´½¨Ì×½Ó×Ö
     int lfd = socket(AF_INET, SOCK_STREAM, 0);
     if (lfd == -1)
     {
@@ -39,18 +10,18 @@ int main()
         exit(1);
     }
 
-    //ç»‘å®šIPå’Œç«¯å£
+    //°ó¶¨IPºÍ¶Ë¿Ú
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
-    //server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    inet_pton(AF_INET, "192.168.10.129", &server_addr.sin_addr.s_addr);
+    server_addr.sin_port = htons(port);
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    //inet_pton(AF_INET, "192.168.10.129", &server_addr.sin_addr.s_addr);
 
-    //è®¾ç½®ç«¯å£å¤ç”¨
+    //ÉèÖÃ¶Ë¿Ú¸´ÓÃ
     int opt = 1;
     setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    //ç»‘å®š
+    //°ó¶¨
     int ret = bind(lfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
     if (ret == -1)
     {
@@ -58,15 +29,149 @@ int main()
         exit(1);
     }
 
-    //ç›‘å¬
+    //¼àÌı
     ret = listen(lfd, 128);
     if (ret == -1)
     {
         perror("listen error");
         exit(1);
     }
+    return lfd;
+}
 
-    //å»ºæ ‘
+void acceptClient(void* arg)
+{
+    printf("accept a client...\n");
+    sockInfo* info = (sockInfo*)arg;
+    struct sockaddr_in cliaddr;
+    char ip[16] = {0};
+    socklen_t len = sizeof(cliaddr);
+    int cfd = accept(info->fd ,(struct sockaddr*)&cliaddr ,&len);
+    printf("new client ip=%s port=%d\n",
+            inet_ntop(AF_INET, &cliaddr.sin_addr.s_addr, ip, 16),
+            ntohs(cliaddr.sin_port));
+
+    //ÉèÖÃ·Ç¶ÂÈûÊôĞÔ
+    int flag = fcntl(cfd, F_GETFL);
+    flag |= O_NONBLOCK;
+    fcntl(cfd, F_SETFL, flag);
+
+    //ÉèÖÃ¼àÊÓ¶Á»º³åÇø±ßÑØ´¥·¢
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = cfd;
+
+    //½«ÊÂ¼şÉÏÊ÷
+    int ret = epoll_ctl(info->epfd, EPOLL_CTL_ADD, cfd, &ev);
+    if (ret == -1)
+    {
+        perror("epoll_ctl");
+    }
+}
+
+void recvHttpRequest(void* arg)
+{
+    printf("start recv message...\n");
+    sockInfo* info = (sockInfo*)arg;
+    //¶ÁÈ¡ÇëÇó(ÏÈ¶ÁÈ¡Ò»ĞĞ,ÔÚ°ÑÆäËûĞĞ¶ÁÈ¡,ÈÓµô)
+    char buf[N] = {0};
+    char tem[N] = {0};
+    int len = 0, totle = 0;
+    while ((len = recv(info->fd, tem, sizeof tem, 0)) > 0)
+    {
+        if (totle + len < sizeof buf)
+        {
+            memcpy(buf + totle, tem, len);
+        }
+        totle += len;
+    }
+
+    if (len == 0)
+    {
+        printf("Client is disconnect\n");
+        epoll_ctl(info->epfd, EPOLL_CTL_DEL, info->fd, NULL);
+        close(info->fd);
+    }
+    else if (len == -1 && errno == EAGAIN)
+    {
+        //½âÎöÇëÇóĞĞ
+        char* pos = strstr(buf, "\r\n");
+        int len = pos - buf;
+        buf[len] = 0;
+        parseRequestLine(buf, info->fd);
+    }
+    else
+    {
+        perror("read error");
+    }
+}
+
+void parseRequestLine(const char* buf, int cfd)
+{
+    //½âÎöÇëÇóĞĞ  GET /a.txt  HTTP/1.1\r\n
+    char method[256] = {0};
+    char content[256] = {0};
+    sscanf(buf, "%[^ ] %[^ ]", method, content);
+    printf("[%s]  [%s]\n", method, content);
+
+    if (strcmp(method, "get") == 0 || strcmp(method, "GET") == 0)
+    {
+        char* strfile = content + 1;
+        strdecode(strfile, strfile);  //ÖĞÎÄ×ª»»
+        if (*strfile == 0)//Èç¹ûÃ»ÓĞÇëÇóÎÄ¼ş,Ä¬ÈÏÇëÇóµ±Ç°Ä¿Â¼
+            strfile = "./";
+        struct stat s;    //linuxÓĞ¹ØÎÄ¼şµÄ½á¹¹Ìå£¬¿ÉÒÔµÃµ½ÎÄ¼şµÄÊôĞÔ
+        if (stat(strfile, &s) < 0)//ÎÄ¼ş²»´æÔÚ
+        {
+            printf("file not fount\n");
+            send_header(cfd, 404, "NOT FOUND", get_mime_type("*.html"), 0);
+            send_file(cfd, "error.html");
+        }
+        else
+        {
+            if (S_ISREG(s.st_mode))//ÆÕÍ¨ÎÄ¼ş
+            {
+                printf("request is a File\n");
+                send_header(cfd, 200, "OK", get_mime_type(strfile), s.st_size);
+                send_file(cfd, strfile);
+
+            }
+            else if (S_ISDIR(s.st_mode))//Ä¿Â¼
+            {
+                printf("request is Dir\n");
+                send_header(cfd, 200, "OK", get_mime_type("*.html"), 0);
+                send_file(cfd, "dir_header.html");
+
+                struct dirent** mylist = NULL;
+                char buf[N] = {0};
+                int len = 0;
+                int n = scandir(strfile, &mylist, NULL, alphasort); //»ñÈ¡Ä¿Â¼ÀïÃæµÄÎÄ¼ş
+                for (int i = 0; i < n; i++)
+                {
+                    if (mylist[i]->d_type == DT_DIR)//Èç¹ûÊÇÄ¿Â¼
+                    {
+                        len = sprintf(buf, "<li><a href=%s/ >%s</a></li>", mylist[i]->d_name, mylist[i]->d_name);
+                    }
+                    else  //Èç¹ûÊÇÎÄ¼ş
+                    {
+                        len = sprintf(buf, "<li><a href=%s >%s</a></li>", mylist[i]->d_name, mylist[i]->d_name);
+                    }
+
+                    send(cfd, buf, len, 0);
+
+                    free(mylist[i]);
+                }
+                free(mylist);
+                send_file(cfd, "dir_tail.html");
+            }
+        }
+    }
+}
+
+void epollRun(int lfd)
+{
+    printf("epollRun...\n");
+    //½¨Ê÷
     int epfd = epoll_create(1);
     if (epfd == -1)
     {
@@ -74,24 +179,22 @@ int main()
         exit(1);
     }
 
-    //è®©ç›‘å¬çš„æ–‡ä»¶æè¿°ç¬¦ä¸Šæ ‘
+    //ÈÃ¼àÌıµÄÎÄ¼şÃèÊö·ûÉÏÊ÷
     struct epoll_event ev;
-    ev.events = EPOLLIN;     //æ£€æµ‹lfdçš„è¯»ç¼“å†²åŒº
+    ev.events = EPOLLIN;     //¼ì²âlfdµÄ¶Á»º³åÇø
     ev.data.fd = lfd;
-    ret = epoll_ctl(epfd, EPOLL_CTL_ADD, lfd, &ev);
+    int ret = epoll_ctl(epfd, EPOLL_CTL_ADD, lfd, &ev);
     if (ret == -1)
     {
         perror("epoll_ctl error");
         exit(1);
     }
 
-    //åˆ›å»ºçº¿ç¨‹æ± 
-    ThreadPool* pool = new ThreadPool(5, 30);
-    printf("server is running...\n");
+	ThreadPool* pool = new ThreadPool(4, 8);
 
     struct epoll_event evs[N];
     int size = sizeof(evs) / sizeof(struct epoll_event);
-    //æŒç»­æ£€æµ‹
+
     while (true)
     {
         int num = epoll_wait(epfd, evs, size, -1);
@@ -109,131 +212,185 @@ int main()
             info->fd = fd;
             if (fd == lfd)
             {
-                pool->addTask(Task(acceptConn, info));
+                printf("lfd\n");
+                pool->addTask(Task(acceptClient, info));
             }
             else
             {
-                pool->addTask(Task(communication, info));
+                printf("cfd\n");
+                pool->addTask(Task(recvHttpRequest, info));
             }
         }
     }
+}
 
-    close(lfd);
-    close(epfd);
+//Í¨¹ıÎÄ¼şÃû×Ö»ñµÃÎÄ¼şÀàĞÍ
+const char* get_mime_type(const char* name)
+{
+    const char* dot;
+
+    dot = strrchr(name, '.');	//×ÔÓÒÏò×ó²éÕÒ¡®.¡¯×Ö·û;Èç²»´æÔÚ·µ»ØNULL
+    /*
+     *charset=iso-8859-1	Î÷Å·µÄ±àÂë£¬ËµÃ÷ÍøÕ¾²ÉÓÃµÄ±àÂëÊÇÓ¢ÎÄ£»
+     *charset=gb2312		ËµÃ÷ÍøÕ¾²ÉÓÃµÄ±àÂëÊÇ¼òÌåÖĞÎÄ£»
+     *charset=utf-8			´ú±íÊÀ½çÍ¨ÓÃµÄÓïÑÔ±àÂë£»
+     *						¿ÉÒÔÓÃµ½ÖĞÎÄ¡¢º«ÎÄ¡¢ÈÕÎÄµÈÊÀ½çÉÏËùÓĞÓïÑÔ±àÂëÉÏ
+     *charset=euc-kr		ËµÃ÷ÍøÕ¾²ÉÓÃµÄ±àÂëÊÇº«ÎÄ£»
+     *charset=big5			ËµÃ÷ÍøÕ¾²ÉÓÃµÄ±àÂëÊÇ·±ÌåÖĞÎÄ£»
+     *
+     *ÒÔÏÂÊÇÒÀ¾İ´«µİ½øÀ´µÄÎÄ¼şÃû£¬Ê¹ÓÃºó×ºÅĞ¶ÏÊÇºÎÖÖÎÄ¼şÀàĞÍ
+     *½«¶ÔÓ¦µÄÎÄ¼şÀàĞÍ°´ÕÕhttp¶¨ÒåµÄ¹Ø¼ü×Ö·¢ËÍ»ØÈ¥
+     */
+    if (dot == (char*)0)
+        return "text/plain; charset=utf-8";
+    if (strcmp(dot, ".html") == 0 || strcmp(dot, ".htm") == 0)
+        return "text/html; charset=utf-8";
+    if (strcmp(dot, ".jpg") == 0 || strcmp(dot, ".jpeg") == 0)
+        return "image/jpeg";
+    if (strcmp(dot, ".gif") == 0)
+        return "image/gif";
+    if (strcmp(dot, ".png") == 0)
+        return "image/png";
+    if (strcmp(dot, ".css") == 0)
+        return "text/css";
+    if (strcmp(dot, ".au") == 0)
+        return "audio/basic";
+    if (strcmp( dot, ".wav") == 0)
+        return "audio/wav";
+    if (strcmp(dot, ".avi") == 0)
+        return "video/x-msvideo";
+    if (strcmp(dot, ".mov") == 0 || strcmp(dot, ".qt") == 0)
+        return "video/quicktime";
+    if (strcmp(dot, ".mpeg") == 0 || strcmp(dot, ".mpe") == 0)
+        return "video/mpeg";
+    if (strcmp(dot, ".vrml") == 0 || strcmp(dot, ".wrl") == 0)
+        return "model/vrml";
+    if (strcmp(dot, ".midi") == 0 || strcmp(dot, ".mid") == 0)
+        return "audio/midi";
+    if (strcmp(dot, ".mp3") == 0)
+        return "audio/mpeg";
+    if (strcmp(dot, ".ogg") == 0)
+        return "application/ogg";
+    if (strcmp(dot, ".pac") == 0)
+        return "application/x-ns-proxy-autoconfig";
+
+    return "text/plain; charset=utf-8";
+}
+/**********************************************************************/
+/* Get a line from a socket, whether the line ends in a newline,
+ * carriage return, or a CRLF combination.  Terminates the string read
+ * with a null character.  If no newline indicator is found before the
+ * end of the buffer, the string is terminated with a null.  If any of
+ * the above three line terminators is read, the last character of the
+ * string will be a linefeed and the string will be terminated with a
+ * null character.
+ * Parameters: the socket descriptor
+ *             the buffer to save the data in
+ *             the size of the buffer
+ * Returns: the number of bytes stored (excluding null) */
+/**********************************************************************/
+
+//ÏÂÃæµÄº¯ÊıµÚ¶şÌìÊ¹ÓÃ
+/*
+ * ÕâÀïµÄÄÚÈİÊÇ´¦Àí%20Ö®ÀàµÄ¶«Î÷£¡ÊÇ"½âÂë"¹ı³Ì¡£
+ * %20 URL±àÂëÖĞµÄ¡® ¡¯(space)
+ * %21 '!' %22 '"' %23 '#' %24 '$'
+ * %25 '%' %26 '&' %27 ''' %28 '('......
+ * Ïà¹ØÖªÊ¶htmlÖĞµÄ¡® ¡¯(space)ÊÇ&nbsp
+ */
+// %E8%8B%A6%E7%93%9C
+void strdecode(char *to, char *from)
+{
+    for ( ; *from != '\0'; ++to, ++from) {
+
+        if (from[0] == '%' && isxdigit(from[1]) && isxdigit(from[2])) { //ÒÀ´ÎÅĞ¶ÏfromÖĞ %20 Èı¸ö×Ö·û
+
+            *to = hexit(from[1])*16 + hexit(from[2]);//×Ö·û´®E8±ä³ÉÁËÕæÕıµÄ16½øÖÆµÄE8
+            from += 2;                      //ÒÆ¹ıÒÑ¾­´¦ÀíµÄÁ½¸ö×Ö·û(%21Ö¸ÕëÖ¸Ïò1),±í´ïÊ½3µÄ++from»¹»áÔÙÏòºóÒÆÒ»¸ö×Ö·û
+        } else
+            *to = *from;
+    }
+    *to = '\0';
+}
+
+//16½øÖÆÊı×ª»¯Îª10½øÖÆ, return 0²»»á³öÏÖ
+int hexit(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+
     return 0;
 }
 
-void acceptConn(void* arg)  
+//"±àÂë"£¬ÓÃ×÷»ØĞ´ä¯ÀÀÆ÷µÄÊ±ºò£¬½«³ı×ÖÄ¸Êı×Ö¼°/_.-~ÒÔÍâµÄ×Ö·û×ªÒåºó»ØĞ´¡£
+//strencode(encoded_name, sizeof(encoded_name), name);
+void strencode(char* to, size_t tosize, const char* from)
 {
-    //epollæ ‘ä¼šè‡ªåŠ¨æ£€æµ‹æ–‡ä»¶æè¿°ç¬¦çš„å˜åŒ–ï¼Œä¸éœ€è¦å†while(true)
-    sockInfo* info = (sockInfo*)arg;
-    struct sockaddr_in cliaddr;
-    char ip[16] = {0};
-    socklen_t len = sizeof(cliaddr);
-    int cfd = accept(info->fd ,(struct sockaddr*)&cliaddr ,&len);
-    printf("new client ip=%s port=%d\n",
-            inet_ntop(AF_INET, &cliaddr.sin_addr.s_addr, ip, 16),
-            ntohs(cliaddr.sin_port));
+    int tolen;
 
-    //è®¾ç½®éå µå¡å±æ€§
-    int flag = fcntl(cfd, F_GETFL);
-    flag |= O_NONBLOCK;
-    fcntl(cfd, F_SETFL, flag);
-
-    //è®¾ç½®ç›‘è§†è¯»ç¼“å†²åŒºè¾¹æ²¿è§¦å‘
-    struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLET;
-    ev.data.fd = cfd;
-
-    //å°†äº‹ä»¶ä¸Šæ ‘
-    epoll_ctl(info->epfd, EPOLL_CTL_ADD, cfd, &ev);
+    for (tolen = 0; *from != '\0' && tolen + 4 < tosize; ++from) {
+        if (isalnum(*from) || strchr("/_.-~", *from) != (char*)0) {
+            *to = *from;
+            ++to;
+            ++tolen;
+        } else {
+            sprintf(to, "%%%02x", (int) *from & 0xff);
+            to += 3;
+            tolen += 3;
+        }
+    }
+    *to = '\0';
 }
 
 
-void communication(void* arg)
+void send_header(int cfd, int code, const char* info, const char* filetype, int length)
 {
-    sockInfo* info = (sockInfo*)arg;
-
-    //è¯»å–è¯·æ±‚(å…ˆè¯»å–ä¸€è¡Œ,åœ¨æŠŠå…¶ä»–è¡Œè¯»å–,æ‰”æ‰)
-    char buf[N] = {0};
-    char tmp[N] = {0};
-    int n = Readline(info->fd, buf, sizeof(buf));
-    if (n <= 0)
+    //·¢ËÍ×´Ì¬ĞĞ
+    char buf[1024] = {0};
+    int len = 0;
+    len = sprintf(buf, "HTTP/1.1 %d %s\r\n", code, info);
+    send(cfd, buf, len, 0);
+    //·¢ËÍÏìÓ¦Í·
+    len = sprintf(buf, "Content-Type:%s\r\n", filetype);
+    send(cfd, buf, len, 0);
+    if (length > 0)
     {
-        if (n == 0)
-        {
-            printf("client is disconnect\n");
-            epoll_ctl(info->epfd, EPOLL_CTL_DEL, info->fd, NULL);
-            close(info->fd);
-        }
-        else
-        {
-            perror("read error");
-        }
+        len = sprintf(buf, "Content-Length:%d\r\n", length);
+        send(cfd, buf, len, 0);
+
+    }
+    //¿ÕĞĞ
+    send(cfd, "\r\n", 2, 0);
+}
+
+void send_file(int cfd, const char* path)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+    {
+        perror("open error");
         return;
     }
-    printf("%s\n", buf);
-    int ret = 0;
-    while ((ret = Readline(info->fd, tmp, sizeof(tmp))) > 0);
 
-    //è§£æè¯·æ±‚è¡Œ  GET /a.txt  HTTP/1.1\r\n
-    char method[256] = {0};
-    char content[256] = {0};
-    char protocol[256] = {0};
-    sscanf(buf, "%[^ ] %[^ ] %[^ \r\n]", method, content, protocol);
-    printf("[%s]  [%s]  [%s]\n", method, content, protocol);
-
-    if (strcmp(method, "get") == 0 || strcmp(method, "GET") == 0)
+    char buf[1024] = {0};
+    while (1)
     {
-        char* strfile = content + 1;
-        strdecode(strfile, strfile);  //ä¸­æ–‡è½¬æ¢
-        if (*strfile == 0)//å¦‚æœæ²¡æœ‰è¯·æ±‚æ–‡ä»¶,é»˜è®¤è¯·æ±‚å½“å‰ç›®å½•
-            strfile = "./";
-        struct stat s;
-        if (stat(strfile, &s) < 0)//æ–‡ä»¶ä¸å­˜åœ¨
+        int len = read(fd, buf, sizeof(buf));
+        if (len <= 0)
         {
-            printf("file not fount\n");
-            send_header(info->fd, 404, "NOT FOUND", get_mime_type("*.html"), 0);
-            send_file(info->fd, "error.html");
+            break;
         }
         else
         {
-            if (S_ISREG(s.st_mode))//æ™®é€šæ–‡ä»¶
-            {
-                printf("request is a File\n");
-                send_header(info->fd, 200, "OK", get_mime_type(strfile), s.st_size);
-                send_file(info->fd, strfile);
-
-            }
-            else if (S_ISDIR(s.st_mode))//ç›®å½•
-            {
-                printf("request is Dir\n");
-                send_header(info->fd, 200, "OK", get_mime_type("*.html"), 0);
-                send_file(info->fd, "dir_header.html");
-
-                struct dirent** mylist = NULL;
-                char buf[N] = {0};
-                int len = 0;
-                int n = scandir(strfile, &mylist, NULL, alphasort);
-                for (int i = 0; i < n; i++)
-                {
-                    if (mylist[i]->d_type == DT_DIR)//å¦‚æœæ˜¯ç›®å½•
-                    {
-                        len = sprintf(buf, "<li><a href=%s/ >%s</a></li>", mylist[i]->d_name, mylist[i]->d_name);
-                    }
-                    else
-                    {
-                        len = sprintf(buf, "<li><a href=%s >%s</a></li>", mylist[i]->d_name, mylist[i]->d_name);
-                    }
-
-                    send(info->fd, buf, len, 0);
-
-                    free(mylist[i]);
-                }
-                free(mylist);
-                send_file(info->fd, "dir_tail.html");
-            }
+            send(cfd, buf, len, 0);
+            usleep(10); //·¢ËÍ¶Ë·¢ËÍÌ«¿ì¿ÉÒÔ»áÓĞÒ»Ğ©ÒâÁÏÖ®ÍâµÄÎÊÌâ£¬ÈÃËüÂıÒ»µã
         }
+        memset(buf, 0, sizeof(buf));
     }
-}
 
+    close(fd);
+}

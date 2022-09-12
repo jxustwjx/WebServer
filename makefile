@@ -1,14 +1,17 @@
-src=$(wildcard threadpool.cpp taskqueue.cpp server.cpp pub.cpp)
-obj=$(patsubst %.cpp, %.o, $(src))
+server:taskqueue.o threadpool.o server.o main.o
+	g++ taskqueue.o threadpool.o server.o main.o -lpthread -o app
 
-target=server
+taskqueue.o:taskqueue.cpp
+	g++ -c taskqueue.cpp
 
-$(target):$(obj)
-	g++ $(obj) -lpthread -o $(target)
+threadpool.o:threadpool.cpp
+	g++ -c threadpool.cpp
 
-%.o:%.c   # %: 匹配文件
-	g++ -c $<
+server.o:server.cpp
+	g++ -c server.cpp
 
-.PHONY:clean #声明为伪文件
+main.o:main.cpp
+	g++ -c main.cpp
+
 clean:
-	rm $(obj) $(target)
+	rm taskqueue.o threadpool.o server.o main.o app

@@ -25,15 +25,26 @@ typedef struct sockInfo
     int fd;
 }sockInfo;
 
-void acceptClient(void* arg);
-void recvHttpRequest(void* arg);
-int initListenFd(unsigned short port);
-void epollRun(int lfd);
-void parseRequestLine(const char* buf, int cfd);
-const char* get_mime_type(const char *name);
-int hexit(char c);//16进制转10进制
-void strencode(char* to, size_t tosize, const char* from);//编码
-void strdecode(char *to, char *from);//解码
-void send_file(int cfd, const char* path);
-void send_header(int cfd, int code, const char* info, const char* filetype, int length);
+class WebServer
+{
+public:
+	WebServer(unsigned int port, int minn = 4, int maxn = 8);
+	~WebServer();
+	static void acceptClient(void* arg);
+    static void recvHttpRequest(void* arg);
+	int initListenFd();
+	void epollRun();
+private:
+	unsigned int m_port;
+	int epfd;
+	int lfd;
+	ThreadPool* pool;
+};
 
+void parseRequestLine(const char* buf, int cfd);
+const char* get_mime_type(const char* name);
+int hexit(char c);
+void strencode(char* to, size_t tosize, const char* from);
+void send_file(int cfd, const char* path);
+void strdecode(char* to, char* from);
+void send_header(int cfd, int code, const char* info, const char* filetype, int length);

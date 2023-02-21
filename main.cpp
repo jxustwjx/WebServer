@@ -13,7 +13,8 @@ int main(int argc, char* argv[])
 
     unsigned short port = atoi(argv[1]);
     chdir(argv[2]);
-    int lfd = initListenFd(port);
-    epollRun(lfd);
+    WebServer* webserver = new WebServer(port);
+    webserver->epollRun();
+    delete webserver;
     return 0;
 } 

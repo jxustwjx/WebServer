@@ -19,6 +19,7 @@ WebServer::~WebServer()
     close(lfd);
     close(epfd);
     delete pool;
+    pool = NULL;
 }
 
 void WebServer::acceptClient(void* arg)

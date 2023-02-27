@@ -16,6 +16,8 @@ WebServer::WebServer(unsigned int port, int minn, int maxn)
 
 WebServer::~WebServer()
 {
+    close(lfd);
+    close(epfd);
     delete pool;
 }
 

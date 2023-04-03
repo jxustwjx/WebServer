@@ -69,13 +69,7 @@ void WebServer::recvHttpRequest(void* arg)
         totle += len;
     }
 
-    if (len == 0)
-    {
-        printf("Client is disconnect\n");
-        epoll_ctl(info->epfd, EPOLL_CTL_DEL, info->fd, NULL);
-        close(info->fd);
-    }
-    else if (len == -1 && errno == EAGAIN)
+    if (len == -1 && errno == EAGAIN)
     {
         //½âÎöÇëÇóÐÐ
         char* pos = strstr(buf, "\r\n");
@@ -83,10 +77,9 @@ void WebServer::recvHttpRequest(void* arg)
         buf[len] = 0;
         parseRequestLine(buf, info->fd);
     }
-    else
-    {
-        perror("read error");
-    }
+
+    epoll_ctl(info->epfd, EPOLL_CTL_DEL, info->fd, NULL);
+    close(info->fd);
 }
 
 int WebServer::initListenFd()
@@ -343,6 +336,7 @@ void send_file(int cfd, const char* path)
         return;
     }
 
+#if 0
     char buf[1024] = { 0 };
     while (1)
     {
@@ -358,7 +352,15 @@ void send_file(int cfd, const char* path)
         }
         memset(buf, 0, sizeof(buf));
     }
-
+#else
+    off_t offset = 0;
+    int size = lseek(fd, 0, SEEK_END);
+    lseek(fd, 0, SEEK_SET);
+    while (offset < size)
+    {
+        sendfile(cfd, fd, &offset, size);
+    }
+#endif
     close(fd);
 }
 

@@ -93,6 +93,7 @@ int ThreadPool::getAliveNumber()
 
 void* ThreadPool::worker(void* arg)
 {
+    pthread_detach(pthread_self());  //线程分离，资源自给释放
     ThreadPool* pool = static_cast<ThreadPool*>(arg);
     while (true)
     {

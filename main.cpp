@@ -16,5 +16,6 @@ int main(int argc, char* argv[])
     WebServer* webserver = new WebServer(port);
     webserver->epollRun();
     delete webserver;
+    webserver = NULL;
     return 0;
 } 

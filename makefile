@@ -1,4 +1,4 @@
-server:taskqueue.o threadpool.o server.o main.o
+app:taskqueue.o threadpool.o server.o main.o
 	g++ taskqueue.o threadpool.o server.o main.o -lpthread -o app
 
 taskqueue.o:taskqueue.cpp
